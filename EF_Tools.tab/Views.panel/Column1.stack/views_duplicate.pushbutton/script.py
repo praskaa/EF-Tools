@@ -2,7 +2,7 @@
 
 __title__ = "Duplicate views"
 __author__ = "Erik Frits"
-__doc__ = """Version = 1.2
+__doc__ = """Version = 1.3
 Date    = 31.08.2020
 _____________________________________________________________________
 Description:
@@ -21,6 +21,10 @@ TODO:
 [FEATURE] - Set selection to duplicated views once its done
 _____________________________________________________________________
 Last Updates:
+- [13.10.2026] v1.3 pyRevit 7.0 fix: load XAML with wpf.LoadComponent
+               (WPFWindow.apply_contrast_foregrounds crashed on custom
+               Window.Resources). Schedule/Legend if->elif fix.
+               Transaction rollback + error alert instead of silent pass.
 - [22.11.2021] Selection is update to new Views
 - [01.06.2021] Added rules for Scheudles
 - [01.06.2021] Added rules for Legends 
@@ -32,6 +36,8 @@ _____________________________________________________________________
 # ║║║║╠═╝║ ║╠╦╝ ║ ╚═╗
 # ╩╩ ╩╩  ╚═╝╩╚═ ╩ ╚═╝ IMPORTS
 # ==================================================
+import os
+
 from Autodesk.Revit.DB import (View,
                                ViewPlan,
                                ViewSection,
@@ -42,7 +48,7 @@ from Autodesk.Revit.DB import (View,
                                ViewType,
                                ElementId)
 # pyRevit
-from pyrevit.forms import WPFWindow, alert
+from pyrevit.forms import alert
 
 # Custom imports
 from Snippets._selection import get_selected_views
@@ -51,9 +57,12 @@ from Snippets._selection import get_selected_views
 # .NET Imports
 from clr import AddReference
 AddReference("System")
+# pyRevit ships IronPython.Wpf under an engine-prefixed DLL name, so
+# AddReference("IronPython.Wpf") fails. Use pyRevit's own loader instead.
+from pyrevit.framework import wpf
 from System.Collections.Generic import List
 from System.Diagnostics.Process import Start
-from System.Windows.Window      import DragMove
+from System.Windows import Window
 from System.Windows.Input       import MouseButtonState
 
 
@@ -63,18 +72,23 @@ from System.Windows.Input       import MouseButtonState
 # ==================================================
 uidoc = __revit__.ActiveUIDocument
 doc = __revit__.ActiveUIDocument.Document
+SCRIPT_DIR = os.path.dirname(__file__)
 
 # ╔═╗╦  ╔═╗╔═╗╔═╗╔═╗╔═╗
 # ║  ║  ╠═╣╚═╗╚═╗║╣ ╚═╗
 # ╚═╝╩═╝╩ ╩╚═╝╚═╝╚═╝╚═╝ CLASSES
 # ==================================================
-class MyWindow(WPFWindow):
+class MyWindow(Window):
     """The dialog box that controls the whole script."""
 
-    VIEW_TYPES = [ViewPlan, ViewSection, View3D,ViewSchedule, View]
+    VIEW_TYPES = [ViewPlan, ViewSection, View3D, ViewSchedule, View]
 
     def __init__(self, xaml_file_name):
-        self.form = WPFWindow.__init__(self, xaml_file_name)
+        # Plain wpf.LoadComponent instead of pyrevit.forms.WPFWindow:
+        # pyRevit 7.0 runs apply_contrast_foregrounds() inside WPFWindow, which
+        # crashes ('NoneType' has no attribute 'Color') on XAML that defines
+        # its own Window.Resources.
+        wpf.LoadComponent(self, os.path.join(SCRIPT_DIR, xaml_file_name))
         self.main_title.Text = __title__
         self.selected_views = get_selected_views(uidoc, exit_if_none=True, title=__title__)
 
@@ -89,36 +103,38 @@ class MyWindow(WPFWindow):
         - ViewDuplicateOption.Duplicate,
         - ViewDuplicateOption.WithDetailing,
         - ViewDuplicateOption.AsDependent"""
+        count = self.count  # read once, before the transaction starts
         new_views = []
         t = Transaction(doc, __title__)
         t.Start()
         try:
-
             for view in self.selected_views:
                 # if doc.CanViewBeDuplicated(view):
 
                 # SCHEDULES
                 if type(view) == ViewSchedule:
-                    for i in range(self.count):
-                        view.Duplicate(ViewDuplicateOption.Duplicate)
+                    for i in range(count):
+                        new_views.append(view.Duplicate(ViewDuplicateOption.Duplicate))
 
                 # LEGENDS
-                if view.ViewType == ViewType.Legend:
-                    for i in range(self.count):
-                        view.Duplicate(ViewDuplicateOption.WithDetailing)
+                elif view.ViewType == ViewType.Legend:
+                    for i in range(count):
+                        new_views.append(view.Duplicate(ViewDuplicateOption.WithDetailing))
 
                 # REGULAR VIEWS
                 else:
-                    for i in range(self.count):
-                        new_view = view.Duplicate(options)
-                        new_views.append(new_view)
-        except:
-            pass
+                    for i in range(count):
+                        new_views.append(view.Duplicate(options))
+            t.Commit()
+        except Exception as ex:
+            if t.HasStarted() and not t.HasEnded():
+                t.RollBack()
+            alert("Duplication failed:\n{}".format(ex), title=__title__)
+            return
 
+        # Select the new views (after commit, so the ids are final)
         if new_views:
-            uidoc.Selection.SetElementIds(List[ElementId]([]))
             uidoc.Selection.SetElementIds(List[ElementId](new_views))
-        t.Commit()
 
 
 #____________________________________________________________________ PROPERTIES
@@ -143,7 +159,7 @@ class MyWindow(WPFWindow):
     def header_drag(self,sender,e):
         """Drag window by holding LeftButton on the header."""
         if e.LeftButton == MouseButtonState.Pressed:
-            DragMove(self)
+            self.DragMove()
 
 
     def button_duplicate(self,sender,e):
