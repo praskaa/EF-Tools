@@ -10,8 +10,7 @@ from pyrevit import forms
 # .NET IMPORTS
 from clr import AddReference
 AddReference("System")
-from System.Diagnostics.Process import Start
-from System.Windows.Window import DragMove
+from System.Diagnostics import Process
 from System.Windows.Input import MouseButtonState
 
 import os
@@ -23,6 +22,14 @@ import os
 
 class BaseRenaming(forms.WPFWindow):
     """GUI for [Views: Find and Replace]"""
+
+    def apply_contrast_foregrounds(self):
+        """FIX pyRevit 7: GUI_BaseRename.xaml defines its own <Window.Resources>, which replaces
+        the theme dictionary pyRevit merged into the window. pyRevit's version of this method then
+        gets None for its theme brushes and crashes ('NoneType' has no attribute 'Color').
+        This window has a fixed custom dark style, so the theme contrast step is not needed."""
+        pass
+
     def start(self, title, version="Version: _"):
         xaml_dir_abs_path = os.path.abspath(os.path.dirname(__file__))
         xaml_file_name = os.path.join(xaml_dir_abs_path,"GUI_BaseRename.xaml")
@@ -96,12 +103,12 @@ class BaseRenaming(forms.WPFWindow):
 
     def Hyperlink_RequestNavigate(self, sender, e):
         """Forwarding for a Hyperlink"""
-        Start(e.Uri.AbsoluteUri)
+        Process.Start(e.Uri.AbsoluteUri)
 
     def header_drag(self,sender,e):
         """Drag window by holding LeftButton on the header."""
         if e.LeftButton == MouseButtonState.Pressed:
-            DragMove(self)
+            self.DragMove()
 
     def button_run(self, sender, e):
         """Button action: Rename view with given """
